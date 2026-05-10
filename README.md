@@ -109,12 +109,20 @@ Deploy a site:
 bun run scripts/deploy-site.ts ./my-site ./keypair.json
 ```
 
+### Cache (peer bootstrap)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /cache/info` | Entry count, total size, by-type breakdown |
+| `GET /cache/snapshot` | Streamed `tar.gz` of the full cache (cache.db + blob dirs). VACUUM-INTO consistent. Public read; lets a cold gateway warm up from a hot peer without re-fetching every entry from chain. See [Cache Snapshot](#cache-snapshot) below. |
+
 ### System
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /health` | Health check + cache stats |
 | `GET /version` | Server version info |
+| `GET /` | Terminal-styled homepage with live stats |
 
 ## Caching
 
@@ -243,7 +251,9 @@ The `accept` field in the SDL tells the Akash provider to route traffic for your
 
 ## Cache Snapshot
 
-Public read-only snapshot of the gateway's disk cache so a cold peer can bootstrap from a hot one without re-fetching every entry from Solana.
+Public read-only snapshot of the gateway's disk cache so a cold peer can bootstrap from a hot one without re-fetching every entry from Solana. The snapshot streams `tar -czf -` directly — first byte arrives quickly even for large caches, and Cloudflare's 100s edge timeout doesn't bite.
+
+### Local bootstrap
 
 ```bash
 # warm a cold gateway from a peer's hot cache
@@ -251,7 +261,15 @@ Public read-only snapshot of the gateway's disk cache so a cold peer can bootstr
 # then start (or restart) your gateway
 ```
 
-Or inline:
+### Kubernetes bootstrap
+
+For a deployment whose `/app/cache` is mounted from a PVC, the script handles the full safe restore — scale the deployment to 0, wipe the PVC via a temp pod, untar the peer snapshot, verify the row count, scale back up:
+
+```bash
+./scripts/bootstrap-cache-from-peer.sh --k8s https://gateway.solanainternet.com iqlabs gateway
+```
+
+### Or inline
 
 ```bash
 curl -sS https://peer-gateway/cache/snapshot | tar -xz -C ./cache
@@ -260,7 +278,7 @@ curl -sS https://peer-gateway/cache/snapshot | tar -xz -C ./cache
 | Endpoint | Description |
 |---|---|
 | `GET /cache/info` | entry count + total size + by-type breakdown |
-| `GET /cache/snapshot` | tar.gz of full cache (cache.db + blob dirs). VACUUM-INTO consistent. public read. |
+| `GET /cache/snapshot` | streamed `tar.gz` of the full cache (cache.db + blob dirs). VACUUM-INTO consistent. public read. |
 
 The gateway is read-only by design — no `POST /cache/restore` or `/sync-from-peer`. Operators write to their own cache directory directly (filesystem op on their own host); they don't write across the network.
 

@@ -171,12 +171,17 @@ const HTML = `<!doctype html>
 <div class="ep"><code>GET /site/{sig}/{path}</code><span class="desc">serve a file from the manifest</span></div>
 <div class="ep"><code>GET /meta/{sig}.json</code><span class="desc">metaplex-compatible json metadata</span></div>
 <div class="ep"><code>GET /img/{sig}.png</code><span class="desc">raw image bytes</span></div>
+<div class="ep"><code>GET /data/{sig}</code><span class="desc">raw asset data</span></div>
+<div class="ep"><code>GET /view/{sig}</code><span class="desc">rendered html view of a text inscription</span></div>
+<div class="ep"><code>GET /render/{sig}</code><span class="desc">png/svg render of a text inscription</span></div>
 <div class="ep"><code>GET /table/{pda}/rows</code><span class="desc">paginated rows; supports If-None-Match → 304</span></div>
 <div class="ep"><code>GET /table/{pda}/subscribe</code><span class="desc">SSE: hello / row / ping every 30s</span></div>
+<div class="ep"><code>GET /table/{feedPda}/thread/{threadPda}</code><span class="desc">resolved op + replies in one call</span></div>
 <div class="ep"><code>GET /user/{pubkey}/posts</code><span class="desc">opportunistic signer index</span></div>
+<div class="ep"><code>GET /user/{pubkey}/assets</code><span class="desc">assets uploaded by a wallet</span></div>
 <div class="ep"><code>GET /gate/{tablePda}/check/{wallet}</code><span class="desc">server-side token-gate check</span></div>
-<div class="ep"><code>GET /cache/info</code><span class="desc">cache stats: entries, size, by-type</span></div>
-<div class="ep"><code>GET /cache/snapshot</code><span class="desc">tar.gz of full cache (public; bootstrap a cold gateway)</span></div>
+<div class="ep"><code>GET /cache/info</code><span class="desc">cache stats — entries, size, by-type</span></div>
+<div class="ep"><code>GET /cache/snapshot</code><span class="desc">streamed tar.gz of full cache (public; bootstrap a cold peer)</span></div>
 <p>full schema at <a href="/openapi.json">/openapi.json</a> &middot; interactive at <a href="/docs">/docs</a></p>
 
 <h2><span class="num">$</span> set sns to point here</h2>

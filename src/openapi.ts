@@ -12,7 +12,7 @@ export const openapiSpec = {
   openapi: "3.0.3",
   info: {
     title: "IQ Gateway",
-    version: "0.2.1",
+    version: "0.2.2",
     description:
       "Read-only HTTP cache for IQ SDK on-chain data. Same data served by any gateway instance — anyone can run their own.",
     license: { name: "See LICENSE in the iq-gateway repo" },
