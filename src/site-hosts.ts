@@ -18,6 +18,7 @@ export const RESERVED_GATEWAY_PATHS = [
   "/health",
   "/version",
   "/sns",
+  "/cache",
 ] as const;
 
 export function isReservedGatewayPath(path: string): boolean {

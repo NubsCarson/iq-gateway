@@ -241,6 +241,29 @@ Value:  <your-deployment>.ingress.akashprovid.com
 
 The `accept` field in the SDL tells the Akash provider to route traffic for your domain to the container.
 
+## Cache Snapshot
+
+Public read-only snapshot of the gateway's disk cache so a cold peer can bootstrap from a hot one without re-fetching every entry from Solana.
+
+```bash
+# warm a cold gateway from a peer's hot cache
+./scripts/bootstrap-cache-from-peer.sh https://gateway.solanainternet.com ./cache
+# then start (or restart) your gateway
+```
+
+Or inline:
+
+```bash
+curl -sS https://peer-gateway/cache/snapshot | tar -xz -C ./cache
+```
+
+| Endpoint | Description |
+|---|---|
+| `GET /cache/info` | entry count + total size + by-type breakdown |
+| `GET /cache/snapshot` | tar.gz of full cache (cache.db + blob dirs). VACUUM-INTO consistent. public read. |
+
+The gateway is read-only by design — no `POST /cache/restore` or `/sync-from-peer`. Operators write to their own cache directory directly (filesystem op on their own host); they don't write across the network.
+
 ## Architecture
 
 The gateway is a read-only cache layer. It never writes to Solana. All data is public and recoverable from chain. Multiple gateways can serve the same data independently.

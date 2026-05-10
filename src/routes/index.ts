@@ -9,3 +9,4 @@ export { dataRouter } from "./data";
 export { siteRouter } from "./site";
 export { gateRouter } from "./gate";
 export { snsRouter } from "./sns";
+export { cacheRouter } from "./cache-snapshot";

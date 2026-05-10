@@ -15,6 +15,7 @@ import {
   dataRouter,
   siteRouter,
   snsRouter,
+  cacheRouter,
   gateRouter,
 } from "./routes";
 import { startBackfill } from "./backfill";
@@ -22,6 +23,7 @@ import { openapiSpec } from "./openapi";
 import { serveManifestPath } from "./routes/site";
 import { resolveDomainToSig } from "./chain/sns";
 import { isReservedGatewayPath, normalizeHost, isSafePath } from "./site-hosts";
+import { homeHandler } from "./routes/home";
 import type { Context, Next } from "hono";
 
 const GENESIS_HASHES: Record<string, string> = {
@@ -80,6 +82,7 @@ app.route("/table", tableRouter);
 app.route("/data", dataRouter);
 app.route("/site", siteRouter);
 app.route("/sns", snsRouter);
+app.route("/cache", cacheRouter);
 app.route("/gate", gateRouter);
 
 // OpenAPI spec + Swagger UI — loaded from CDN so no npm dep is needed.
@@ -149,6 +152,7 @@ app.use("/*", async (c: Context, next: Next) => {
   return c.body(body, response.status as 200, headers);
 });
 
+app.get("/", homeHandler);
 app.use("/*", serveStatic({ root: "./public" }));
 
 const port = Number(process.env.PORT) || 3000;

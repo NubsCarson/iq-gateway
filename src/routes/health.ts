@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import pkg from "../../package.json" with { type: "json" };
 import { metaCache, imageCache, userStateCache } from "../cache/memory";
 import { snsCache, snsInflight } from "../chain/sns";
 import { getStats } from "../cache/store";
@@ -7,7 +8,9 @@ import { rowsCache, indexCache, sliceCache, inflight } from "./table";
 
 export const healthRouter = new Hono();
 
-const VERSION = process.env.VERSION || "0.1.0";
+// Version comes from package.json so we never have to remember to bump
+// two files. process.env.VERSION still wins (lets ops override at runtime).
+const VERSION = process.env.VERSION || pkg.version;
 const START_TIME = Date.now();
 
 function formatBytes(bytes: number): string {

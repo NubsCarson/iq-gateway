@@ -45,3 +45,22 @@ akash tx deployment update deploy.yml --from wallet
 
 ### DNS
 `gateway.solanainternet.com` → Akash ingress
+
+## 2026-05-10 — Cache snapshot (v0.2.0)
+
+Added `GET /cache/info` + `GET /cache/snapshot` for peer bootstrap of cold gateways. Read-only — preserves the gateway's "no writes over HTTP" property. Operators warm a cold instance with `scripts/bootstrap-cache-from-peer.sh`.
+
+### Snapshot internals
+
+`tar.gz` of `CACHE_DIR` with a VACUUM-INTO consistent `cache.db`. Excludes WAL/SHM journal files (recipient sqlite would reject those from a different write epoch).
+
+```ts
+const db = new Database(liveDb, { readonly: true });
+db.run(`VACUUM INTO '${stageDb}'`);  // bun:sqlite can't bind path as a parameter
+```
+
+Falls back to `cp` of the live db if VACUUM fails.
+
+### Akash redeploy preserves cache
+
+The persistent-storage section in `akash/deploy.yaml` stays byte-identical across `tx deployment update` runs. Akash only re-creates the container when the image changes; the `/app/cache` PV survives. Same logic for k8s — the `gateway-cache` PVC has `persistentVolumeReclaimPolicy: Retain`, so even an accidental PVC delete leaves the underlying PV with data intact.

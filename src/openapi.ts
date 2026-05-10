@@ -12,7 +12,7 @@ export const openapiSpec = {
   openapi: "3.0.3",
   info: {
     title: "IQ Gateway",
-    version: "0.1.0",
+    version: "0.2.0",
     description:
       "Read-only HTTP cache for IQ SDK on-chain data. Same data served by any gateway instance — anyone can run their own.",
     license: { name: "See LICENSE in the iq-gateway repo" },
@@ -27,6 +27,7 @@ export const openapiSpec = {
     { name: "users", description: "Per-wallet views — assets, sessions, profile, connections, authored posts" },
     { name: "gate", description: "Token-gate verification for gated tables" },
     { name: "site", description: "Solana-hosted static sites" },
+    { name: "cache", description: "Disk-cache snapshot for peer-bootstrap" },
     { name: "system", description: "Health checks, cache stats, version" },
   ],
   paths: {
@@ -312,6 +313,21 @@ export const openapiSpec = {
           { name: "path", in: "path", required: true, schema: { type: "string" } },
         ],
         responses: { 200: { description: "File content" } },
+      },
+    },
+    "/cache/info": {
+      get: {
+        tags: ["cache"],
+        summary: "Cache stats — entry count, total size, by-type breakdown",
+        responses: { 200: { description: "ok" } },
+      },
+    },
+    "/cache/snapshot": {
+      get: {
+        tags: ["cache"],
+        summary: "Download a tar.gz of the entire cache",
+        description: "Public. tar.gz of CACHE_DIR with a VACUUM-INTO consistent cache.db. Operators warming a cold gateway untar this into their CACHE_DIR before/while their gateway runs.",
+        responses: { 200: { description: "tar.gz stream" } },
       },
     },
     "/sns/{domain}": {
