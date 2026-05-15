@@ -42,7 +42,7 @@ export const openapiSpec = {
           { name: "fresh", in: "query", schema: { type: "boolean" }, description: "Bypass memory/disk cache" },
         ],
         responses: {
-          200: { description: "Rows page. Supports If-None-Match (304) via weak ETag." },
+          200: { description: "Rows page with `__txSignature`, `__signer`, and `__blockTime` when available. Supports If-None-Match (304) via weak ETag; head-page refresh is gated by table meta `lastTimestamp`." },
           304: { description: "Not Modified — ETag matched" },
           400: { description: "Invalid PDA" },
           404: { description: "Table not found" },
@@ -327,23 +327,23 @@ export const openapiSpec = {
       get: {
         tags: ["cache"],
         summary: "Paginated disk-cache entry index",
-        description: "Read-only index for external cache explorers. Returns metadata only, not full blobs.",
+        description: "Read-only index for external cache explorers. Returns metadata only, not full blobs or local filesystem paths.",
         parameters: [
           { name: "type", in: "query", schema: { type: "string" }, description: "Optional cache type filter, e.g. rows, meta, img, site-file" },
-          { name: "q", in: "query", schema: { type: "string", minLength: 3, maxLength: 256 }, description: "Optional indexed substring search against the cache key" },
+          { name: "q", in: "query", schema: { type: "string", minLength: 3, maxLength: 256 }, description: "Optional indexed substring search against the cache key; requires 3-256 chars" },
           { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } },
           { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque cursor returned by the previous page" },
         ],
-        responses: { 200: { description: "`{ entries, count, limit, nextCursor }`" }, 400: { description: "Invalid filter/cursor" } },
+        responses: { 200: { description: "`{ entries, count, limit, nextCursor }`" }, 400: { description: "Invalid filter/cursor" }, 503: { description: "Indexed search unavailable" } },
       },
     },
     "/cache/entries/{id}": {
       get: {
         tags: ["cache"],
-        summary: "Disk-cache entry detail with preview",
+        summary: "Disk-cache entry detail with bounded preview",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" }, description: "Opaque entry id from /cache/entries" }],
         responses: {
-          200: { description: "`{ entry, hasBlob, contentType, preview }`" },
+          200: { description: "`{ entry, hasBlob, contentType, preview }`; no local filesystem path is exposed" },
           404: { description: "Entry not found" },
         },
       },
@@ -362,15 +362,15 @@ export const openapiSpec = {
     "/cache/memory": {
       get: {
         tags: ["cache"],
-        summary: "Memory-cache counts, keys, and optional previews",
+        summary: "Process-local memory-cache counts, keys, and optional previews",
         parameters: [
           { name: "cache", in: "query", schema: { type: "string", default: "all" }, description: "Optional cache name: meta, images, userState, sns, tableRows, tableIndex, tableSlice" },
-          { name: "q", in: "query", schema: { type: "string", minLength: 3, maxLength: 256 }, description: "Optional substring search against memory cache keys" },
+          { name: "q", in: "query", schema: { type: "string", minLength: 3, maxLength: 256 }, description: "Optional substring search against memory cache keys; requires 3-256 chars" },
           { name: "includeValues", in: "query", schema: { type: "boolean", default: false }, description: "Include bounded value previews for one selected cache" },
-          { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 }, description: "Requested page size; includeValues=true is capped at 50 entries" },
           { name: "cursor", in: "query", schema: { type: "string" }, description: "Numeric offset cursor for memory-cache pages" },
         ],
-        responses: { 200: { description: "Memory-cache summary or page" }, 400: { description: "Invalid cache name" } },
+        responses: { 200: { description: "Memory-cache summary or page. Counts clear when the gateway process restarts." }, 400: { description: "Invalid cache name/filter/cursor" } },
       },
     },
     "/cache/snapshot": {
