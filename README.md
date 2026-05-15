@@ -61,7 +61,7 @@ That's it. Your gateway is live at `http://localhost:3000`.
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /table/{pda}/rows` | Read table rows with pagination. Supports `If-None-Match` → `304 Not Modified` via weak ETag. Rows include `__txSignature`, `__signer` (fee payer), and `__blockTime` (chain-truth timestamp). |
+| `GET /table/{pda}/rows` | Read table rows with pagination. Supports `If-None-Match` -> `304 Not Modified` via weak ETag. Rows include `__txSignature`, `__signer` (fee payer), and `__blockTime` (chain-truth timestamp). Head-page refresh is gated by table meta `lastTimestamp` so unchanged tables avoid extra signature scans. |
 | `GET /table/{pda}/index` | Full signature index for a table |
 | `GET /table/{pda}/slice` | Read specific rows by signature |
 | `GET /table/{pda}/meta` | Table metadata (name, columns, `lastTimestamp`, gate config) |
@@ -114,6 +114,10 @@ bun run scripts/deploy-site.ts ./my-site ./keypair.json
 | Endpoint | Description |
 |----------|-------------|
 | `GET /cache/info` | Entry count, total size, by-type breakdown |
+| `GET /cache/entries` | Paginated disk-cache entry index. Supports `type`, indexed `q` (3-256 chars), `limit`, and opaque `cursor`. |
+| `GET /cache/entries/{id}` | One disk-cache entry with a bounded decoded preview when possible. |
+| `GET /cache/blob/{id}` | Raw cached bytes for a disk-cache entry. |
+| `GET /cache/memory` | Process-local memory-cache counts, or paginated searchable keys/previews with `cache=<name>&q=<text>&includeValues=true`. Memory clears on restart; value-preview pages are capped lower than key-only pages. |
 | `GET /cache/snapshot` | Streamed `tar.gz` of the full cache (cache.db + blob dirs). VACUUM-INTO consistent. Public read; lets a cold gateway warm up from a hot peer without re-fetching every entry from chain. See [Cache Snapshot](#cache-snapshot) below. |
 
 ### System
@@ -133,6 +137,11 @@ Three-tier cache with different TTLs:
 | Memory (LRU) | 60s head, 5min other | Fast reads |
 | Disk (SQLite) | 5min rows, 24h immutable | Persistent across restarts |
 | Chain (Solana) | Permanent | Source of truth |
+
+Rows head pages use the table account's `lastTimestamp` as a cheap change
+gate. If the timestamp is unchanged, the gateway can keep serving the cached
+head page; if it changed, the background refresh catches up new signatures and
+stamps the fresh timestamp once the indexed signature list overlaps the cache.
 
 Individual rows are cached for 24 hours (on-chain data is immutable). Head page responses are cached for 60 seconds with throttled background refresh.
 
@@ -278,9 +287,20 @@ curl -sS https://peer-gateway/cache/snapshot | tar -xz -C ./cache
 | Endpoint | Description |
 |---|---|
 | `GET /cache/info` | entry count + total size + by-type breakdown |
+| `GET /cache/entries` | paginated disk-cache entry index for external explorers; `q` is indexed and requires 3-256 chars |
+| `GET /cache/entries/{id}` | one disk-cache entry with metadata + bounded preview |
+| `GET /cache/blob/{id}` | raw cached bytes for an entry |
+| `GET /cache/memory` | process-local memory-cache counts, searchable keys, and optional bounded previews |
 | `GET /cache/snapshot` | streamed `tar.gz` of the full cache (cache.db + blob dirs). VACUUM-INTO consistent. public read. |
 
 The gateway is read-only by design — no `POST /cache/restore` or `/sync-from-peer`. Operators write to their own cache directory directly (filesystem op on their own host); they don't write across the network.
+
+The explorer endpoints are intentionally paginated/read-only so a separate site
+can browse cache contents without asking the gateway to dump a multi-GB cache as
+one JSON response. Responses use opaque entry ids and never expose the local
+cache filesystem path. Disk previews are byte-bounded; memory value previews are
+smaller and process-local because memory cache is only the current gateway
+process state.
 
 ## Architecture
 
