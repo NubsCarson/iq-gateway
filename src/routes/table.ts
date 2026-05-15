@@ -11,14 +11,35 @@ import { isValidPublicKey } from "../utils";
 
 export const tableRouter = new Hono();
 
-const rowsCache = new MemoryCache<string>(500);
+// Cache entry shape:
+//   `json` is the pre-serialized response body — reused for ETag generation
+//   and HTTP responses without re-stringifying on every hit.
+//   `rows` and `lastTimestamp` are only populated for /rows head-page entries;
+//   they let backgroundRefresh do timestamp-gated incremental updates.
+//   /thread, /rows pagination (`before=...`), and disk-cache migrations leave
+//   them undefined — backgroundRefresh skips those entries.
+type Row = Record<string, unknown>;
+interface RowsCacheEntry {
+  json: string;
+  rows?: Row[];
+  lastTimestamp?: number;
+}
+
+const rowsCache = new MemoryCache<RowsCacheEntry>(500);
 const indexCache = new MemoryCache<string>(50);
 const sliceCache = new MemoryCache<string>(2000);
 
-const inflight = new Map<string, Promise<string>>();
+// Inflight dedup: concurrent requests for the same operation share one Promise.
+// The Map is shared by /rows, /thread, /index, /slice, and background refresh.
+// Route prefixes keep different work shapes from colliding.
+const inflight = new Map<string, Promise<unknown>>();
 
 function cacheKey(...parts: string[]): string {
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 24);
+}
+
+function rowsInflightKey(kind: "fetch" | "refresh", key: string): string {
+  return `rows:${kind}:${key}`;
 }
 
 /** Weak ETag derived from the cached JSON body. Stable across cache hits
@@ -62,14 +83,60 @@ setInterval(() => {
 
 // ─── /table/:tablePda/rows ───────────────────────────────────────────────────
 
+interface SignatureCatchup {
+  signatures: string[];
+  overlapFound: boolean;
+}
+
+const SIGNATURE_PAGE_LIMIT = 1000;
+const MAX_BACKGROUND_SIG_PAGES = 3;
+
+// Page through getSignaturesForAddress until we either:
+//   - find `knownNewestSig` in a page (overlap → return only sigs above it)
+//   - hit the bounded catch-up limit or end of history
+// Cold-cache case (knownNewestSig=null): just return the first page.
+async function fetchSigsUntilOverlap(
+  tablePda: string,
+  knownNewestSig: string | null,
+): Promise<SignatureCatchup> {
+  if (!knownNewestSig) {
+    return {
+      signatures: await fetchRecentSignatures(tablePda, SIGNATURE_PAGE_LIMIT),
+      overlapFound: true,
+    };
+  }
+
+  const collected: string[] = [];
+  let before: string | undefined;
+
+  for (let pageNo = 0; pageNo < MAX_BACKGROUND_SIG_PAGES; pageNo++) {
+    const page = await fetchRecentSignatures(tablePda, SIGNATURE_PAGE_LIMIT, before);
+    if (page.length === 0) return { signatures: collected, overlapFound: false };
+
+    const idx = page.indexOf(knownNewestSig);
+    if (idx >= 0) {
+      return { signatures: [...collected, ...page.slice(0, idx)], overlapFound: true };
+    }
+
+    collected.push(...page);
+    if (page.length < SIGNATURE_PAGE_LIMIT) {
+      return { signatures: collected, overlapFound: false };
+    }
+    before = page[page.length - 1];
+  }
+
+  return { signatures: collected, overlapFound: false };
+}
+
 function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], limit: number, before?: string) {
+  const pageRows = rows.slice(0, limit);
   return {
     tablePda,
-    rows,
-    count: rows.length,
+    rows: pageRows,
+    count: pageRows.length,
     limit,
     before: before || null,
-    nextCursor: rows.length === limit ? (rows[rows.length - 1] as { __txSignature?: string })?.__txSignature : null,
+    nextCursor: pageRows.length === limit ? (pageRows[pageRows.length - 1] as { __txSignature?: string })?.__txSignature : null,
   };
 }
 
@@ -130,6 +197,112 @@ async function resolveRowsFromSignatures(signatures: string[]): Promise<Record<s
   return rows;
 }
 
+// Cold path: full fetch (sigs + rows). Used on cache miss and on disk-cache
+// hits that need to be re-promoted to memory. Returns the entry so callers
+// can respond immediately without re-reading the cache.
+async function fetchRowsCold(
+  tablePda: string,
+  key: string,
+  limit: number,
+  before: string | undefined,
+  ttl: number,
+): Promise<RowsCacheEntry> {
+  const signatures = await fetchRecentSignatures(tablePda, limit, before);
+  const rows = await resolveRowsFromSignatures(signatures);
+  const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before));
+  // Only head-page entries carry rows/lastTimestamp — paginated requests are
+  // immutable and don't need background refresh.
+  const entry: RowsCacheEntry = before
+    ? { json }
+    : { json, rows, lastTimestamp: await fetchLastTimestamp(tablePda) };
+  rowsCache.set(key, entry, ttl);
+  if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
+  console.log(`[rows] ${tablePda.slice(0,8)} sigs=${signatures.length} rows=${rows.length}`);
+  return entry;
+}
+
+async function fetchLastTimestamp(tablePda: string): Promise<number> {
+  const meta = await getTableMetaCached(tablePda);
+  return meta?.lastTimestamp ?? 0;
+}
+
+// Background refresh — runs out-of-band when shouldRefresh() passes (every 30s).
+//
+// Cheap path: meta cache hit (5min TTL) → 0 RPC if last_timestamp unchanged.
+// We use the cached meta because /notify already handles the hot path:
+// in-app writers POST /notify after a commit, prepending rows directly. This
+// refresh is the safety net for external writers (CLI/bots) that bypass
+// /notify — at worst they're visible after meta cache expires (~5min).
+//
+// Entries from disk-cache (or any pre-upgrade caches) land here with
+// `lastTimestamp` undefined. That falls through the "different" branch
+// naturally: first run fetches sigs, finds no truly-new ones, and stamps
+// lastTimestamp. From there it behaves like any other entry.
+async function backgroundRefresh(
+  tablePda: string,
+  key: string,
+  limit: number,
+  ttl: number,
+): Promise<void> {
+  const entry = rowsCache.get(key);
+  if (!entry || !entry.rows) return;
+
+  const meta = await getTableMetaCached(tablePda);
+  if (!meta) return;
+
+  if (meta.lastTimestamp === entry.lastTimestamp) return;
+
+  const newestSig = entry.rows[0]?.__txSignature as string | undefined;
+  const { signatures: newSigs, overlapFound } = await fetchSigsUntilOverlap(tablePda, newestSig ?? null);
+
+  if (newSigs.length === 0) {
+    // Overlap at index 0 means the cache already has the newest indexed sig
+    // (common after /notify). No overlap means likely RPC indexing lag, so
+    // hold off stamping lastTimestamp and retry on the next refresh.
+    if (overlapFound) {
+      entry.lastTimestamp = meta.lastTimestamp;
+      rowsCache.set(key, entry, ttl);
+    }
+    return;
+  }
+
+  const existing = new Set(entry.rows.map(r => (r as { __txSignature?: string }).__txSignature));
+  const trulyNew = newSigs.filter(s => !existing.has(s)).slice(0, limit);
+
+  if (trulyNew.length === 0) {
+    // Either /notify already prepended these, or we just migrated an entry
+    // whose rows already covered current chain state. Only stamp when the
+    // indexed sig list actually overlapped the cache.
+    if (overlapFound) {
+      entry.lastTimestamp = meta.lastTimestamp;
+      rowsCache.set(key, entry, ttl);
+    }
+    return;
+  }
+
+  const newRowsMap = await readMultipleRows(trulyNew);
+  const newRows: Row[] = [];
+  for (const sig of trulyNew) {
+    const row = newRowsMap.get(sig);
+    if (row) {
+      newRows.push(row);
+      const rowJson = JSON.stringify(row);
+      const rk = cacheKey("row", sig);
+      sliceCache.set(rk, rowJson, SLICE_ROW_TTL);
+      setDiskCache("meta", rk, rowJson).catch(() => {});
+    }
+  }
+
+  if (newRows.length === 0) return;
+
+  entry.rows = [...newRows, ...entry.rows].slice(0, limit);
+  if (overlapFound) entry.lastTimestamp = meta.lastTimestamp;
+  entry.json = JSON.stringify(buildRowsResponse(tablePda, entry.rows, limit, undefined));
+  rowsCache.set(key, entry, ttl);
+  setDiskCache("rows", key, entry.json).catch(() => {});
+  console.log(`[rows:bg] ${tablePda.slice(0,8)} +${newRows.length} rows`);
+}
+
 tableRouter.get("/:tablePda/rows", async (c) => {
   const tablePda = c.req.param("tablePda");
   const limit = Math.min(Number(c.req.query("limit")) || 50, 100);
@@ -144,40 +317,35 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   const isHead = !before;
   const ttl = isHead ? HEAD_TTL : TTL.ROWS;
 
-  async function fetchRows(): Promise<string> {
-    const signatures = await fetchRecentSignatures(tablePda, limit, before);
-    const rows = await resolveRowsFromSignatures(signatures);
-    const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before));
-    rowsCache.set(key, json, ttl);
-    if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
-    console.log(`[rows] ${tablePda.slice(0,8)} sigs=${signatures.length} rows=${rows.length}`);
-    return json;
-  }
-
   if (!fresh) {
     // Memory cache hit
     const mem = rowsCache.get(key);
     if (mem) {
       // Head page: throttled background refresh (max once per 30s per key)
       if (isHead && shouldRefresh(key)) {
-        deduped(inflight, key, fetchRows).catch(() => {});
+        deduped(inflight, rowsInflightKey("refresh", key), () => backgroundRefresh(tablePda, key, limit, ttl)).catch(() => {});
       }
-      return respondWithEtag(c, { ...JSON.parse(mem), cached: true }, etagFor(mem));
+      return respondWithEtag(c, { ...JSON.parse(mem.json), cached: true }, etagFor(mem.json));
     }
 
-    // Disk cache hit — serve immediately, no background refresh
-    // (memory cache will expire, triggering a fresh fetch next time)
+    // Disk cache hit — promote to memory, then serve.
+    // For head pages we keep `rows` from the JSON body so the next background
+    // refresh can do incremental updates; lastTimestamp stays undefined and
+    // gets stamped on the first refresh pass.
     const disk = await getDiskCache("rows", key);
     if (disk) {
       const json = disk.toString("utf8");
-      rowsCache.set(key, json, ttl);
+      const entry: RowsCacheEntry = isHead
+        ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
+        : { json };
+      rowsCache.set(key, entry, ttl);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
     }
   }
 
   try {
-    const json = await deduped(inflight, key, fetchRows);
-    return respondWithEtag(c, { ...JSON.parse(json), cached: false }, etagFor(json));
+    const entry = await deduped(inflight, rowsInflightKey("fetch", key), () => fetchRowsCold(tablePda, key, limit, before, ttl));
+    return respondWithEtag(c, { ...JSON.parse(entry.json), cached: false }, etagFor(entry.json));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
     if (message.includes("not found") || message.includes("Invalid public key")) {
@@ -187,7 +355,10 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     const stale = await getDiskCache("rows", key);
     if (stale) {
       const json = stale.toString("utf8");
-      rowsCache.set(key, json, ttl);
+      const entry: RowsCacheEntry = isHead
+        ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
+        : { json };
+      rowsCache.set(key, entry, ttl);
       console.warn(`[table] RPC failed for ${tablePda}, serving stale cache`);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
     }
@@ -275,7 +446,9 @@ tableRouter.get("/:feedPda/thread/:threadPda", async (c) => {
 
   const key = cacheKey("thread", feedPda, threadPda, String(replyLimit), String(feedScan));
 
-  async function fetchThread(): Promise<string> {
+  // /thread entries skip background incremental refresh (two PDAs, composite
+  // shape). They get a vanilla 60s memory TTL — full re-fetch on miss.
+  async function fetchThread(): Promise<RowsCacheEntry> {
     const [feedSigs, threadSigs] = await Promise.all([
       fetchRecentSignatures(feedPda, feedScan),
       fetchRecentSignatures(threadPda, replyLimit),
@@ -297,28 +470,28 @@ tableRouter.get("/:feedPda/thread/:threadPda", async (c) => {
       .filter((r) => (r as { __txSignature?: string }).__txSignature !== opSig)
       .sort((a, b) => ((a as { time?: number }).time ?? 0) - ((b as { time?: number }).time ?? 0));
 
-    const body = {
+    const json = JSON.stringify({
       threadPda,
       feedPda,
       op,
       replies,
       totalReplies: replies.length,
-    };
-    const json = JSON.stringify(body);
-    rowsCache.set(key, json, HEAD_TTL);
+    });
+    const entry: RowsCacheEntry = { json };
+    rowsCache.set(key, entry, HEAD_TTL);
     console.log(`[thread] ${threadPda.slice(0, 8)} op=${!!op} replies=${replies.length}`);
-    return json;
+    return entry;
   }
 
   const mem = rowsCache.get(key);
   if (mem) {
     if (shouldRefresh(key)) deduped(inflight, key, fetchThread).catch(() => {});
-    return respondWithEtag(c, { ...JSON.parse(mem), cached: true }, etagFor(mem));
+    return respondWithEtag(c, { ...JSON.parse(mem.json), cached: true }, etagFor(mem.json));
   }
 
   try {
-    const json = await deduped(inflight, key, fetchThread);
-    return respondWithEtag(c, { ...JSON.parse(json), cached: false }, etagFor(json));
+    const entry = await deduped(inflight, key, fetchThread);
+    return respondWithEtag(c, { ...JSON.parse(entry.json), cached: false }, etagFor(entry.json));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
     console.error(`[thread] failed for ${threadPda}:`, message);
@@ -512,17 +685,19 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
   setDiskCache("meta", rowKey, rowJson).catch(() => {});
 
-  // Prepend row to all cached head-page responses for this table
+  // Prepend row to all cached head-page entries for this table. Mutates the
+  // entry's `rows` array (used by backgroundRefresh) and re-stringifies json
+  // for the next HTTP response. lastTimestamp is left alone — the next
+  // backgroundRefresh will stamp it when it sees the chain ts matches.
   for (const limit of [50, 100, 20, 10, 5]) {
     const key = cacheKey(tablePda, String(limit), "");
     const existing = rowsCache.get(key);
-    if (!existing) continue;
-    const parsed = JSON.parse(existing);
-    const rows: Record<string, unknown>[] = parsed.rows ?? [];
-    if (rows.some((r: Record<string, unknown>) => r.__txSignature === txSig)) continue;
-    rows.unshift(row);
-    const updated = JSON.stringify({ ...parsed, rows, count: rows.length });
-    rowsCache.set(key, updated, HEAD_TTL);
+    if (!existing || !existing.rows) continue;
+    if (existing.rows.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) continue;
+    existing.rows.unshift(row);
+    existing.rows = existing.rows.slice(0, limit);
+    existing.json = JSON.stringify(buildRowsResponse(tablePda, existing.rows, limit, undefined));
+    rowsCache.set(key, existing, HEAD_TTL);
   }
 
   // Set refresh timestamp to NOW so background refresh doesn't overwrite

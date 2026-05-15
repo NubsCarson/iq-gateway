@@ -12,13 +12,14 @@
   "dependencies": {
     "@bonfida/spl-name-service": "^3.0.21",
     "@coral-xyz/anchor": "^0.32.1",
-    "@iqlabs-official/solana-sdk": "^0.1.21",
+    "@iqlabs-official/solana-sdk": "^0.1.22",
     "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
     "@metaplex-foundation/umi": "^1.4.1",
     "@metaplex-foundation/umi-bundle-defaults": "^1.4.1",
     "@resvg/resvg-js": "^2.6.2",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.0",
+    "bs58": "^4.0.1",
     "dotenv": "^17.2.3",
     "hono": "^4.6.0"
   },
