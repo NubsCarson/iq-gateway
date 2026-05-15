@@ -212,7 +212,9 @@ bun run dev</div>
 <footer>
   built by <a href="https://github.com/IQCoreTeam">IQ Labs</a>
   &middot; <a href="https://github.com/IQCoreTeam/iq-gateway">iq-gateway</a>
-  &middot; <a href="https://github.com/IQCoreTeam/iq-gateway/blob/main/LICENSE">MIT</a>
+  &middot; <a href="https://github.com/NubsCarson">NubsCarson</a>
+
+  &middot; <a href="https://github.com/IQCoreTeam/iq-gateway/blob/main/LICENSE">Apache License</a>
   &middot; <span id="commit">commit ?</span>
 </footer>
 
