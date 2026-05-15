@@ -20,6 +20,7 @@ export async function readTableMeta(
   name: string;
   columns: string[];
   idCol: string;
+  lastTimestamp: number;
   gate: { mint: string; amount: number; gateType: number } | null;
 } | null> {
   const info = await conn.getAccountInfo(new PublicKey(tablePda));
@@ -30,6 +31,7 @@ export async function readTableMeta(
     name: decoded.name,
     columns: decoded.columns,
     idCol: decoded.idCol,
+    lastTimestamp: decoded.lastTimestamp,
     gate: mint !== NULL_MINT
       ? { mint, amount: decoded.gate.amount.toNumber(), gateType: decoded.gate.gateType }
       : null,
