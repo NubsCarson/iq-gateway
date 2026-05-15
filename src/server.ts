@@ -24,6 +24,7 @@ import { serveManifestPath } from "./routes/site";
 import { resolveDomainToSig } from "./chain/sns";
 import { isReservedGatewayPath, normalizeHost, isSafePath } from "./site-hosts";
 import { homeHandler } from "./routes/home";
+import { initCacheStore } from "./cache/store";
 import type { Context, Next } from "hono";
 
 const GENESIS_HASHES: Record<string, string> = {
@@ -67,6 +68,9 @@ async function validateCluster() {
 }
 
 await validateCluster();
+await initCacheStore().catch((e) => {
+  console.warn("[cache] cache store initialization failed:", e instanceof Error ? e.message : e);
+});
 
 const app = new Hono();
 

@@ -14,7 +14,7 @@ import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { metaCache, imageCache, userStateCache } from "../cache/memory";
 import { snsCache, snsInflight } from "../chain/sns";
@@ -24,7 +24,11 @@ const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 const CACHE_ROOT = resolve(CACHE_DIR);
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+const MIN_QUERY_CHARS = 3;
+const MAX_QUERY_CHARS = 256;
 const PREVIEW_BYTES = 64 * 1024;
+const MEMORY_PREVIEW_BYTES = 8 * 1024;
+const MAX_MEMORY_VALUE_LIMIT = 50;
 const CACHE_TYPES = [
   "meta",
   "img",
@@ -72,6 +76,26 @@ function parseLimit(raw: string | undefined): number {
   return Math.min(Math.floor(n), MAX_LIMIT);
 }
 
+function parseOffsetCursor(raw: string | undefined): number | null {
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n;
+}
+
+function parseSearchQuery(raw: string | undefined): string | null {
+  const q = raw?.trim();
+  return q ? q : null;
+}
+
+function isSearchQueryTooShort(q: string | null): boolean {
+  return !!q && q.length < MIN_QUERY_CHARS;
+}
+
+function isSearchQueryTooLong(raw: string | undefined): boolean {
+  return !!raw && raw.length > MAX_QUERY_CHARS;
+}
+
 function isCacheType(raw: string | undefined): raw is CacheType {
   return !!raw && (CACHE_TYPES as readonly string[]).includes(raw);
 }
@@ -112,8 +136,8 @@ function decodeCursor(raw: string | undefined): Cursor | null {
   }
 }
 
-function escapeLike(raw: string): string {
-  return raw.replace(/[\\%_]/g, (m) => `\\${m}`);
+function ftsPhrase(raw: string): string {
+  return `"${raw.replaceAll('"', '""')}"`;
 }
 
 function hashKey(key: string): string {
@@ -130,14 +154,45 @@ function canonicalPath(row: CacheRow): string {
   return join(CACHE_DIR, row.type, hashKey(cacheKeyWithoutType(row)) + ext);
 }
 
-function isInsideCacheDir(path: string): boolean {
-  const rel = relative(CACHE_ROOT, resolve(path));
+function isInsideRoot(root: string, path: string): boolean {
+  const rel = relative(root, resolve(path));
   return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/") && !rel.includes("\0"));
 }
 
-function candidatePaths(row: CacheRow): string[] {
-  return Array.from(new Set([row.path, canonicalPath(row)]))
-    .filter((p) => isInsideCacheDir(p) && existsSync(p));
+function isInsideCacheDir(path: string): boolean {
+  return isInsideRoot(CACHE_ROOT, path);
+}
+
+async function realCacheRoot(): Promise<string | null> {
+  try {
+    return await realpath(CACHE_ROOT);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCandidatePath(path: string): Promise<string | null> {
+  if (!isInsideCacheDir(path)) return null;
+
+  try {
+    const stat = await lstat(path);
+    if (!stat.isFile()) return null;
+
+    const [root, real] = await Promise.all([realCacheRoot(), realpath(path)]);
+    if (!root || !isInsideRoot(root, real)) return null;
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+async function candidatePaths(row: CacheRow): Promise<string[]> {
+  const out: string[] = [];
+  for (const p of Array.from(new Set([row.path, canonicalPath(row)]))) {
+    const resolved = await resolveCandidatePath(p);
+    if (resolved) out.push(resolved);
+  }
+  return out;
 }
 
 function publicEntry(row: CacheRow) {
@@ -167,19 +222,25 @@ function summarizeText(text: string, truncated: boolean) {
   }
 }
 
-function summarizeValue(value: unknown) {
+function summarizeValue(value: unknown, previewBytes = PREVIEW_BYTES) {
   if (Buffer.isBuffer(value)) {
     return { kind: "binary", bytes: value.length };
   }
   if (typeof value === "string") {
-    const truncated = Buffer.byteLength(value) > PREVIEW_BYTES;
-    return summarizeText(truncated ? value.slice(0, PREVIEW_BYTES) : value, truncated);
+    const truncated = Buffer.byteLength(value) > previewBytes;
+    const text = truncated ? Buffer.from(value).subarray(0, previewBytes).toString("utf8") : value;
+    return summarizeText(text, truncated);
   }
-  const json = JSON.stringify(value);
-  if (Buffer.byteLength(json) <= PREVIEW_BYTES) {
+  let json: string;
+  try {
+    json = JSON.stringify(value) ?? "null";
+  } catch {
+    json = String(value);
+  }
+  if (Buffer.byteLength(json) <= previewBytes) {
     return { kind: "json", value, truncated: false };
   }
-  return { kind: "json", text: json.slice(0, PREVIEW_BYTES), truncated: true };
+  return { kind: "json", text: Buffer.from(json).subarray(0, previewBytes).toString("utf8"), truncated: true };
 }
 
 async function previewForPath(path: string) {
@@ -220,9 +281,21 @@ async function runShell(script: string): Promise<{ exitCode: number; stderr: str
   return { exitCode, stderr };
 }
 
+function hasExplorerSearchIndex(): boolean {
+  const db = openReadonlyDb();
+  if (!db) return false;
+  try {
+    return !!db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cache_entries_fts'",
+    ).get();
+  } finally {
+    db.close();
+  }
+}
+
 cacheRouter.get("/info", (c) => {
   const db = openReadonlyDb();
-  if (!db) return c.json({ entries: 0, totalSize: 0, byType: {}, cacheDir: CACHE_DIR });
+  if (!db) return c.json({ entries: 0, totalSize: 0, byType: {} });
   const total = db.query<{ n: number; bytes: number }, []>(
     "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM cache_entries",
   ).get();
@@ -237,46 +310,56 @@ cacheRouter.get("/info", (c) => {
     entries: total?.n ?? 0,
     totalSize: total?.bytes ?? 0,
     byType,
-    cacheDir: CACHE_DIR,
   });
 });
 
 cacheRouter.get("/entries", (c) => {
-  const db = openReadonlyDb();
   const limit = parseLimit(c.req.query("limit"));
   const type = c.req.query("type");
-  const q = c.req.query("q");
+  const q = parseSearchQuery(c.req.query("q"));
   const cursor = decodeCursor(c.req.query("cursor"));
 
+  if (isSearchQueryTooLong(c.req.query("q"))) {
+    return c.json({ error: "q is too long", maxChars: MAX_QUERY_CHARS }, 400);
+  }
+  if (isSearchQueryTooShort(q)) {
+    return c.json({ error: "q is too short", minChars: MIN_QUERY_CHARS }, 400);
+  }
   if (type && !isCacheType(type)) {
     return c.json({ error: "invalid cache type", types: CACHE_TYPES }, 400);
   }
   if (c.req.query("cursor") && !cursor) {
     return c.json({ error: "invalid cursor" }, 400);
   }
+  if (q && !hasExplorerSearchIndex()) {
+    return c.json({ error: "cache search index unavailable" }, 503);
+  }
+
+  const db = openReadonlyDb();
   if (!db) {
-    return c.json({ entries: [], count: 0, limit, nextCursor: null, cacheDir: CACHE_DIR });
+    return c.json({ entries: [], count: 0, limit, nextCursor: null });
   }
 
   const where: string[] = [];
   const params: Array<string | number> = [];
   if (type) {
-    where.push("type = ?");
+    where.push("ce.type = ?");
     params.push(type);
   }
   if (q) {
-    where.push("key LIKE ? ESCAPE '\\'");
-    params.push(`%${escapeLike(q)}%`);
+    where.push("fts.key MATCH ?");
+    params.push(ftsPhrase(q));
   }
   if (cursor) {
-    where.push("(last_accessed < ? OR (last_accessed = ? AND key > ?))");
+    where.push("(ce.last_accessed < ? OR (ce.last_accessed = ? AND ce.key > ?))");
     params.push(cursor.lastAccessed, cursor.lastAccessed, cursor.key);
   }
 
   const sql = [
-    "SELECT key, type, path, size, created_at, last_accessed FROM cache_entries",
+    "SELECT ce.key, ce.type, ce.path, ce.size, ce.created_at, ce.last_accessed FROM cache_entries ce",
+    q ? "JOIN cache_entries_fts fts ON fts.rowid = ce.rowid" : "",
     where.length ? `WHERE ${where.join(" AND ")}` : "",
-    "ORDER BY last_accessed DESC, key ASC",
+    "ORDER BY ce.last_accessed DESC, ce.key ASC",
     "LIMIT ?",
   ].filter(Boolean).join(" ");
   params.push(limit);
@@ -288,7 +371,6 @@ cacheRouter.get("/entries", (c) => {
       count: rows.length,
       limit,
       nextCursor: rows.length === limit ? encodeCursor(rows[rows.length - 1]) : null,
-      cacheDir: CACHE_DIR,
     });
   } finally {
     db.close();
@@ -299,7 +381,7 @@ cacheRouter.get("/entries/:id", async (c) => {
   const row = rowByEncodedId(c.req.param("id"));
   if (!row) return c.json({ error: "cache entry not found" }, 404);
 
-  const paths = candidatePaths(row);
+  const paths = await candidatePaths(row);
   const path = paths[0];
   const preview = path ? await previewForPath(path).catch(() => null) : null;
 
@@ -311,11 +393,11 @@ cacheRouter.get("/entries/:id", async (c) => {
   });
 });
 
-cacheRouter.get("/blob/:id", (c) => {
+cacheRouter.get("/blob/:id", async (c) => {
   const row = rowByEncodedId(c.req.param("id"));
   if (!row) return c.json({ error: "cache entry not found" }, 404);
 
-  const path = candidatePaths(row)[0];
+  const path = (await candidatePaths(row))[0];
   if (!path) return c.json({ error: "cache blob missing" }, 404);
 
   const file = Bun.file(path);
@@ -348,9 +430,20 @@ function isMemoryCacheName(raw: string | undefined): raw is MemoryCacheName {
 cacheRouter.get("/memory", (c) => {
   const cache = c.req.query("cache");
   const includeValues = c.req.query("includeValues") === "true";
-  const limit = parseLimit(c.req.query("limit"));
-  const offset = Math.max(0, Number(c.req.query("cursor")) || 0);
+  const requestedLimit = parseLimit(c.req.query("limit"));
+  const limit = includeValues ? Math.min(requestedLimit, MAX_MEMORY_VALUE_LIMIT) : requestedLimit;
+  const offset = parseOffsetCursor(c.req.query("cursor"));
+  const q = parseSearchQuery(c.req.query("q"));
 
+  if (isSearchQueryTooLong(c.req.query("q"))) {
+    return c.json({ error: "q is too long", maxChars: MAX_QUERY_CHARS }, 400);
+  }
+  if (isSearchQueryTooShort(q)) {
+    return c.json({ error: "q is too short", minChars: MIN_QUERY_CHARS }, 400);
+  }
+  if (offset === null) {
+    return c.json({ error: "invalid cursor" }, 400);
+  }
   if (!cache || cache === "all") {
     return c.json({
       caches: Object.fromEntries(
@@ -367,7 +460,10 @@ cacheRouter.get("/memory", (c) => {
     return c.json({ error: "invalid memory cache", caches: Object.keys(memoryCaches) }, 400);
   }
 
-  const all = memoryCaches[cache].snapshot(includeValues);
+  const needle = q?.toLowerCase();
+  const all = memoryCaches[cache]
+    .snapshot(includeValues)
+    .filter((entry) => !needle || entry.key.toLowerCase().includes(needle));
   const page = all.slice(offset, offset + limit);
 
   return c.json({
@@ -376,7 +472,7 @@ cacheRouter.get("/memory", (c) => {
       key: entry.key,
       expiresAt: entry.expiresAt,
       ttlMs: entry.ttlMs,
-      ...(includeValues && "value" in entry ? { preview: summarizeValue(entry.value) } : {}),
+      ...(includeValues && "value" in entry ? { preview: summarizeValue(entry.value, MEMORY_PREVIEW_BYTES) } : {}),
     })),
     count: page.length,
     total: all.length,

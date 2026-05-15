@@ -330,11 +330,11 @@ export const openapiSpec = {
         description: "Read-only index for external cache explorers. Returns metadata only, not full blobs.",
         parameters: [
           { name: "type", in: "query", schema: { type: "string" }, description: "Optional cache type filter, e.g. rows, meta, img, site-file" },
-          { name: "q", in: "query", schema: { type: "string" }, description: "Optional substring search against the cache key" },
+          { name: "q", in: "query", schema: { type: "string", minLength: 3, maxLength: 256 }, description: "Optional indexed substring search against the cache key" },
           { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } },
           { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque cursor returned by the previous page" },
         ],
-        responses: { 200: { description: "`{ entries, count, limit, nextCursor, cacheDir }`" }, 400: { description: "Invalid filter/cursor" } },
+        responses: { 200: { description: "`{ entries, count, limit, nextCursor }`" }, 400: { description: "Invalid filter/cursor" } },
       },
     },
     "/cache/entries/{id}": {
@@ -365,6 +365,7 @@ export const openapiSpec = {
         summary: "Memory-cache counts, keys, and optional previews",
         parameters: [
           { name: "cache", in: "query", schema: { type: "string", default: "all" }, description: "Optional cache name: meta, images, userState, sns, tableRows, tableIndex, tableSlice" },
+          { name: "q", in: "query", schema: { type: "string", minLength: 3, maxLength: 256 }, description: "Optional substring search against memory cache keys" },
           { name: "includeValues", in: "query", schema: { type: "boolean", default: false }, description: "Include bounded value previews for one selected cache" },
           { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } },
           { name: "cursor", in: "query", schema: { type: "string" }, description: "Numeric offset cursor for memory-cache pages" },

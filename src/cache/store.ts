@@ -25,6 +25,45 @@ const MAX_CACHE_SIZE = parseSize(process.env.MAX_CACHE_SIZE || "10GB");
 
 let db: Database | null = null;
 
+export function ensureCacheSearchIndex(database: Database): boolean {
+  try {
+    database.run(`CREATE VIRTUAL TABLE IF NOT EXISTS cache_entries_fts USING fts5(key, tokenize='trigram')`);
+    database.run(`
+      INSERT INTO cache_entries_fts(rowid, key)
+      SELECT rowid, key
+      FROM cache_entries
+      WHERE rowid NOT IN (SELECT rowid FROM cache_entries_fts)
+    `);
+    return true;
+  } catch (e) {
+    console.warn("[cache] search index unavailable:", e);
+    return false;
+  }
+}
+
+function recordCacheSearchKey(database: Database, key: string): void {
+  try {
+    const row = database.query<{ rowid: number }, [string]>("SELECT rowid FROM cache_entries WHERE key = ?").get(key);
+    if (!row) return;
+    database.run("DELETE FROM cache_entries_fts WHERE key = ?", [key]);
+    database.run("INSERT INTO cache_entries_fts(rowid, key) VALUES (?, ?)", [row.rowid, key]);
+  } catch {
+    if (!ensureCacheSearchIndex(database)) return;
+    const row = database.query<{ rowid: number }, [string]>("SELECT rowid FROM cache_entries WHERE key = ?").get(key);
+    if (!row) return;
+    database.run("DELETE FROM cache_entries_fts WHERE key = ?", [key]);
+    database.run("INSERT INTO cache_entries_fts(rowid, key) VALUES (?, ?)", [row.rowid, key]);
+  }
+}
+
+function removeCacheSearchKey(database: Database, key: string): void {
+  try {
+    database.run("DELETE FROM cache_entries_fts WHERE key = ?", [key]);
+  } catch {
+    ensureCacheSearchIndex(database);
+  }
+}
+
 async function getDb(): Promise<Database> {
   if (db) return db;
   await mkdir(CACHE_DIR, { recursive: true });
@@ -43,7 +82,12 @@ async function getDb(): Promise<Database> {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_last_accessed ON cache_entries(last_accessed)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_type ON cache_entries(type)`);
+  ensureCacheSearchIndex(db);
   return db;
+}
+
+export async function initCacheStore(): Promise<void> {
+  await getDb();
 }
 
 export async function getTotalSize(): Promise<number> {
@@ -65,6 +109,7 @@ export async function recordEntry(
      VALUES (?, ?, ?, ?, ?, ?)`,
     [key, type, path, size, now, now]
   );
+  recordCacheSearchKey(db, key);
   await pruneIfNeeded();
 }
 
@@ -79,6 +124,7 @@ export async function removeEntry(key: string): Promise<void> {
   if (entry) {
     await unlink(entry.path).catch(() => {});
     db.run("DELETE FROM cache_entries WHERE key = ?", [key]);
+    removeCacheSearchKey(db, key);
   }
 }
 
@@ -111,6 +157,7 @@ async function pruneIfNeeded(): Promise<void> {
     if (total <= MAX_CACHE_SIZE * 0.9) break; // Prune to 90% to avoid constant pruning
     await unlink(entry.path).catch(() => {});
     db.run("DELETE FROM cache_entries WHERE key = ?", [entry.key]);
+    removeCacheSearchKey(db, entry.key);
     total -= entry.size;
   }
 }
@@ -132,4 +179,3 @@ export async function getStats(): Promise<{
     usagePercent: MAX_CACHE_SIZE > 0 ? (totalSize / MAX_CACHE_SIZE) * 100 : 0,
   };
 }
-
