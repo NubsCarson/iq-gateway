@@ -114,7 +114,7 @@ bun run scripts/deploy-site.ts ./my-site ./keypair.json
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /dbroots` | Lists every DbRoot the iqlabs program owns, in one call. Uses `getProgramAccounts` with a memcmp filter on the Anchor DbRoot discriminator, so the response stays small (one row per dApp). Cached 30 min — DbRoots only mutate when a new dApp launches or a table is registered. Returns `{dbroots: [{pda, id, creator, tableSeedsCount, globalTableSeedsCount}], fetchedAt, count}`. |
+| `GET /dbroots` | Lists every DbRoot the iqlabs program owns, in one call. Uses `getProgramAccounts` with a memcmp filter on the Anchor DbRoot discriminator, so the response stays small (one row per dApp). Cached 30 min — DbRoots only mutate when a new dApp launches or a table is registered. Returns the raw DbRoot fields with no derivation: `{dbroots: [{pda, id, idHex, creator, tableCreators, extCreators, tableSeeds, globalTableSeeds}], fetchedAt, count}`. Each table-seed is `{label, hex, tablePda}` — `label` is the utf-8 view (or `null` when the hint is an already-hashed seed), `hex` is the raw hint bytes, and `tablePda` is the pre-derived Table PDA (the gateway runs the SDK derivation once per refresh so a client just string-compares an incoming pubkey to classify it). |
 
 ### Cache (peer bootstrap)
 

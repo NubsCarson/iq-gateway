@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import bs58 from "bs58";
-import { contract } from "@iqlabs-official/solana-sdk";
+import { contract, utils } from "@iqlabs-official/solana-sdk";
 import { MemoryCache } from "../cache";
 
 export const dbrootsRouter = new Hono();
@@ -27,25 +27,40 @@ const rpc = new Connection(
   process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
 );
 
-interface DbRootSummary {
+/** One table hint as stored in db_root.table_seeds / global_table_seeds,
+ *  with the table PDA pre-derived so clients only need a string compare.
+ *
+ *  Derivation mirrors the SDK's toSeedBytes: a human label is keccak256'd,
+ *  while an already-hashed 64-hex hint is used as the seed verbatim. The
+ *  resulting seed feeds getTablePda(dbRootPda, seed). */
+interface TableHint {
+  /** utf-8 view if the bytes are printable, else null. */
+  label: string | null;
+  /** hex of the raw hint bytes — always present. */
+  hex: string;
+  /** the derived Table PDA (base58), or null if derivation failed. */
+  tablePda: string | null;
+}
+
+interface DbRootEntry {
   pda: string;
-  /** utf-8 view of db_root.id. Many dApps store a human label here
-   *  ("iqchan", "iq-git-v1", "solchat-root", ...) but some store a raw hashed
-   *  seed instead, in which case this string contains non-printable bytes. */
-  id: string;
-  /** Hex of the raw id bytes — stable across all dApps, useful when `id`
-   *  is binary. */
+  /** utf-8 view of db_root.id, or null when the id bytes aren't printable. */
+  id: string | null;
+  /** hex of the raw id bytes — stable across all dApps. */
   idHex: string;
-  /** True when `id` decodes cleanly to printable ASCII/UTF-8. Lets clients
-   *  decide whether to display `id` or `idHex`. */
-  idIsPrintable: boolean;
   creator: string | null;
-  tableSeedsCount: number;
-  globalTableSeedsCount: number;
+  /** create_table permission. empty = anyone may create. */
+  tableCreators: string[];
+  /** create_ext / private-table permission. empty = anyone. */
+  extCreators: string[];
+  /** db_root.table_seeds, raw. */
+  tableSeeds: TableHint[];
+  /** db_root.global_table_seeds, raw. */
+  globalTableSeeds: TableHint[];
 }
 
 interface DbRootsPayload {
-  dbroots: DbRootSummary[];
+  dbroots: DbRootEntry[];
   fetchedAt: number;
   count: number;
 }
@@ -76,7 +91,39 @@ function isPrintableUtf8(buf: Buffer): boolean {
   return true;
 }
 
-function decodeDbRoot(pda: PublicKey, raw: Buffer): DbRootSummary {
+function toHint(dbRootPda: PublicKey, v: unknown): TableHint {
+  const buf = toBuffer(v);
+  const printable = isPrintableUtf8(buf);
+  const label = printable ? buf.toString("utf8") : null;
+  const hex = buf.toString("hex");
+
+  // Reproduce the SDK derivation: a printable label gets keccak256'd by
+  // toSeedBytes; a 64-hex hint is taken as raw seed bytes. Either way we pass
+  // the original hint string into toSeedBytes so its HEX_64 branch decides.
+  let tablePda: string | null = null;
+  try {
+    const seedInput = label ?? hex;
+    const seed = utils.toSeedBytes(seedInput);
+    tablePda = contract.getTablePda(dbRootPda, seed, PROGRAM_ID).toBase58();
+  } catch {
+    tablePda = null;
+  }
+
+  return { label, hex, tablePda };
+}
+
+function toPubkeyList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((pk) => {
+    try {
+      return pk instanceof PublicKey ? pk.toBase58() : new PublicKey(pk as never).toBase58();
+    } catch {
+      return "";
+    }
+  }).filter(Boolean);
+}
+
+function decodeDbRoot(pda: PublicKey, raw: Buffer): DbRootEntry {
   // BorshAccountsCoder.decode strips the 8-byte discriminator before parsing.
   const decoded = accountCoder.decode("DbRoot", raw) as Record<string, unknown>;
   const tableSeeds = (decoded.table_seeds ?? decoded.tableSeeds ?? []) as unknown[];
@@ -84,15 +131,16 @@ function decodeDbRoot(pda: PublicKey, raw: Buffer): DbRootSummary {
   const creator = decoded.creator as PublicKey | undefined;
 
   const idBuf = toBuffer(decoded.id);
-  const printable = isPrintableUtf8(idBuf);
+  const idPrintable = isPrintableUtf8(idBuf);
   return {
     pda: pda.toBase58(),
-    id: printable ? idBuf.toString("utf8") : "",
+    id: idPrintable ? idBuf.toString("utf8") : null,
     idHex: idBuf.toString("hex"),
-    idIsPrintable: printable,
     creator: creator ? new PublicKey(creator).toBase58() : null,
-    tableSeedsCount: tableSeeds.length,
-    globalTableSeedsCount: globalTableSeeds.length,
+    tableCreators: toPubkeyList(decoded.table_creators ?? decoded.tableCreators),
+    extCreators: toPubkeyList(decoded.ext_creators ?? decoded.extCreators),
+    tableSeeds: tableSeeds.map((s) => toHint(pda, s)),
+    globalTableSeeds: globalTableSeeds.map((s) => toHint(pda, s)),
   };
 }
 
@@ -108,7 +156,7 @@ async function fetchAllDbRoots(): Promise<DbRootsPayload> {
     ],
   });
 
-  const dbroots: DbRootSummary[] = [];
+  const dbroots: DbRootEntry[] = [];
   for (const { pubkey, account } of accounts) {
     try {
       dbroots.push(decodeDbRoot(pubkey, account.data));
@@ -117,8 +165,14 @@ async function fetchAllDbRoots(): Promise<DbRootsPayload> {
     }
   }
 
-  // Sort for stable output across calls.
-  dbroots.sort((a, b) => a.id.localeCompare(b.id) || a.pda.localeCompare(b.pda));
+  // Sort for stable output across calls: named dApps first (by id), then the
+  // rest by pda.
+  dbroots.sort((a, b) => {
+    if (a.id && b.id) return a.id.localeCompare(b.id);
+    if (a.id) return -1;
+    if (b.id) return 1;
+    return a.pda.localeCompare(b.pda);
+  });
 
   return {
     dbroots,

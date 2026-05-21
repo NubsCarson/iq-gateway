@@ -336,7 +336,7 @@ export const openapiSpec = {
       get: {
         tags: ["dbroots"],
         summary: "List every DbRoot owned by the iqlabs program",
-        description: "Discovers DbRoot accounts on-chain via `getProgramAccounts` with a memcmp filter on the Anchor DbRoot discriminator (so the response stays small — one row per dApp). Cached 30 minutes; DbRoots only change when a new dApp launches or a table is registered, so a long TTL is fine. Returns `{dbroots, fetchedAt, count}` where each dbroot summarizes id, pda, creator, and table-seed counts.",
+        description: "Discovers DbRoot accounts on-chain via `getProgramAccounts` with a memcmp filter on the Anchor DbRoot discriminator (so the response stays small — one row per dApp). Cached 30 minutes; DbRoots only change when a new dApp launches or a table is registered, so a long TTL is fine. Returns the raw DbRoot fields, no PDA derivation: `{dbroots: [{pda, id, idHex, creator, tableCreators, extCreators, tableSeeds, globalTableSeeds}], fetchedAt, count}`. Each table-seed entry is `{label, hex, tablePda}` (label = utf-8 view or null when the hint is an already-hashed seed; hex = raw hint bytes; tablePda = the pre-derived Table PDA so a client only needs a string compare to classify an incoming pubkey).",
         responses: {
           200: { description: "DbRoot summaries" },
           500: { description: "Failed to read DbRoots from RPC" },
