@@ -15,8 +15,8 @@
 #      restore flow with no race conditions.
 #
 # Examples:
-#   ./scripts/bootstrap-cache-from-peer.sh https://gateway.solanainternet.com ./cache
-#   ./scripts/bootstrap-cache-from-peer.sh --k8s https://gateway.solanainternet.com iqlabs gateway
+#   ./scripts/bootstrap-cache-from-peer.sh https://gateway.iqlabs.dev ./cache
+#   ./scripts/bootstrap-cache-from-peer.sh --k8s https://gateway.iqlabs.dev iqlabs gateway
 
 set -euo pipefail
 

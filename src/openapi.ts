@@ -20,7 +20,7 @@ export const openapiSpec = {
   servers: [
     { url: "/", description: "Current gateway host" },
     { url: "https://gateway.iqlabs.dev", description: "Production (iqlabs.dev)" },
-    { url: "https://gateway.solanainternet.com", description: "Production (solanainternet.com)" },
+    { url: "https://gateway.iqlabs.dev", description: "Production (iqlabs.dev)" },
     { url: "http://localhost:3000", description: "Local dev" },
   ],
   tags: [

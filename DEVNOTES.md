@@ -50,7 +50,7 @@ The persistent `/app/cache` disk survives `tx deployment update` as long
 as the storage block in the SDL stays byte-identical across versions.
 
 ### DNS
-`gateway.solanainternet.com` → Akash ingress
+`gateway.iqlabs.dev` → Akash ingress
 
 ## 2026-05-10 — Cache snapshot (v0.2.x)
 

@@ -273,7 +273,7 @@ Public read-only snapshot of the gateway's disk cache so a cold peer can bootstr
 
 ```bash
 # warm a cold gateway from a peer's hot cache
-./scripts/bootstrap-cache-from-peer.sh https://gateway.solanainternet.com ./cache
+./scripts/bootstrap-cache-from-peer.sh https://gateway.iqlabs.dev ./cache
 # then start (or restart) your gateway
 ```
 
@@ -282,7 +282,7 @@ Public read-only snapshot of the gateway's disk cache so a cold peer can bootstr
 For a deployment whose `/app/cache` is mounted from a PVC, the script handles the full safe restore — scale the deployment to 0, wipe the PVC via a temp pod, untar the peer snapshot, verify the row count, scale back up:
 
 ```bash
-./scripts/bootstrap-cache-from-peer.sh --k8s https://gateway.solanainternet.com iqlabs gateway
+./scripts/bootstrap-cache-from-peer.sh --k8s https://gateway.iqlabs.dev iqlabs gateway
 ```
 
 ### Or inline

@@ -53,7 +53,7 @@ describe("SITE_PATH_RE", () => {
     expect(m?.[2]).toBe("/index.html");
   });
   test("matches regardless of host (multi-gateway)", () => {
-    const m = `https://gateway.solanainternet.com/site/${NUBS_SIG}/gameboy.html`.match(SITE_PATH_RE);
+    const m = `https://gateway.iqlabs.dev/site/${NUBS_SIG}/gameboy.html`.match(SITE_PATH_RE);
     expect(m?.[1]).toBe(NUBS_SIG);
   });
   test("no match if /site/ is missing or sig is malformed", () => {
