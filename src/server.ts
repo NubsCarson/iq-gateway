@@ -18,8 +18,10 @@ import {
   cacheRouter,
   gateRouter,
   dbrootsRouter,
+  searchRouter,
 } from "./routes";
 import { startBackfill } from "./backfill";
+import { startCatalogBackfillJob } from "./cache/catalog-ingest";
 import { openapiSpec } from "./openapi";
 import { serveManifestPath } from "./routes/site";
 import { resolveDomainToSig } from "./chain/sns";
@@ -94,6 +96,7 @@ app.route("/sns", snsRouter);
 app.route("/cache", cacheRouter);
 app.route("/gate", gateRouter);
 app.route("/dbroots", dbrootsRouter);
+app.route("/search", searchRouter);
 
 // OpenAPI spec + Swagger UI.
 app.get("/openapi.json", (c) => c.json(openapiSpec));
@@ -184,5 +187,6 @@ const port = Number(process.env.PORT) || 3000;
 console.log(`IQ Gateway running on port ${port} [${process.env.SOLANA_CLUSTER}]`);
 
 startBackfill();
+startCatalogBackfillJob();
 
 export default { port, fetch: app.fetch, idleTimeout: 120 };

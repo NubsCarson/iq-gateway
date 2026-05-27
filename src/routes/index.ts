@@ -11,3 +11,4 @@ export { gateRouter } from "./gate";
 export { snsRouter } from "./sns";
 export { cacheRouter } from "./cache-snapshot";
 export { dbrootsRouter } from "./dbroots";
+export { searchRouter } from "./search";

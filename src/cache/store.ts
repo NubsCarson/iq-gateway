@@ -64,7 +64,7 @@ function removeCacheSearchKey(database: Database, key: string): void {
   }
 }
 
-async function getDb(): Promise<Database> {
+export async function getDb(): Promise<Database> {
   if (db) return db;
   await mkdir(CACHE_DIR, { recursive: true });
   db = new Database(DB_PATH);

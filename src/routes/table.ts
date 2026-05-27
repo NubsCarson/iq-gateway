@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import iqlabs from "@iqlabs-official/solana-sdk";
 import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow, getTableMetaCached } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
+import { ingestRow } from "../cache/catalog-ingest";
 import { invalidateUserAssets } from "./user";
 import { isValidPublicKey } from "../utils";
 
@@ -708,6 +709,20 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   }
 
   publishToSubscribers(tablePda, row);
+
+  // Fire-and-forget search index update. We have the row's tablePda but not
+  // its dbroot label cheaply — leave that blank and let the periodic backfill
+  // attach it via the parent dbroot entry. Best-effort: failures don't break
+  // the notify response.
+  (async () => {
+    try {
+      const meta = await getTableMetaCached(tablePda);
+      const tableLabel = meta?.name ?? tablePda;
+      await ingestRow({ row, sig: txSig, dbrootLabel: "", tableLabel });
+    } catch (e) {
+      console.warn("[catalog] ingestRow failed:", e instanceof Error ? e.message : e);
+    }
+  })();
 
   console.log(`[notify] ${tablePda.slice(0, 12)}… tx:${txSig.slice(0, 12)}… injected`);
   return c.json({ ok: true, cached: true });
