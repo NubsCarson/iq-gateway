@@ -83,8 +83,11 @@ export async function removeCatalogEntry(kind: CatalogEntry["kind"], id: string)
   db.run("DELETE FROM catalog_fts WHERE kind = ? AND id = ?", [kind, id]);
 }
 
-/** Full-text search. Empty/whitespace query returns []. FTS5 syntax is
- *  passed through (so callers can use phrase / prefix / boolean ops). */
+/** Full-text search. Empty/whitespace query returns []. Long enough terms
+ *  go through FTS5 (trigram tokenizer — substring match, BM25 ranking).
+ *  Terms with any sub-3-char token fall back to LIKE since trigram has no
+ *  token shorter than 3 chars to match against; the index size is small
+ *  enough that a scan is cheap and the alternative is 0 hits. */
 export async function searchCatalog(
   q: string,
   opts: { kind?: CatalogEntry["kind"]; limit?: number } = {},
@@ -95,14 +98,41 @@ export async function searchCatalog(
   prepare(db);
 
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+  const tokens = term.split(/\s+/).filter(Boolean);
+  const tooShort = tokens.some((t) => t.length < 3);
+
+  if (tooShort) {
+    // Escape LIKE wildcards in user input. Match against label/snippet/body
+    // — the same columns FTS5 would index. Order by label ASC for stable
+    // pagination; BM25 isn't available off-FTS so we don't fake a rank.
+    const escape = (s: string) => s.replace(/[\\%_]/g, "\\$&");
+    const patterns = tokens.map((t) => `%${escape(t)}%`);
+    const where = patterns
+      .map(() => `(label LIKE ? ESCAPE '\\' OR snippet LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')`)
+      .join(" AND ");
+    const args: (string | number)[] = [];
+    for (const p of patterns) args.push(p, p, p);
+    const kindClause = opts.kind ? " AND kind = ?" : "";
+    if (opts.kind) args.push(opts.kind);
+    args.push(limit);
+
+    try {
+      const stmt = db.prepare(
+        `SELECT kind, id, dbroot, label, snippet, body, 0 AS rank
+           FROM catalog_fts WHERE ${where}${kindClause}
+           ORDER BY label LIMIT ?`,
+      );
+      return stmt.all(...args) as SearchHit[];
+    } catch (e) {
+      console.warn("[catalog] LIKE search error:", e instanceof Error ? e.message : e);
+      return [];
+    }
+  }
+
   // FTS5 throws on malformed match strings (e.g. unbalanced quotes). Wrap
   // each token in quotes + add a prefix wildcard so callers can type free
   // text like "iq gameboy" and get prefix-matched hits.
-  const safe = term
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((t) => `"${t.replace(/"/g, '""')}"*`)
-    .join(" ");
+  const safe = tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(" ");
 
   const sql = opts.kind
     ? `SELECT kind, id, dbroot, label, snippet, body, rank
@@ -119,7 +149,7 @@ export async function searchCatalog(
       : (stmt.all(safe, limit) as SearchHit[]);
     return rows;
   } catch (e) {
-    console.warn("[catalog] search error:", e instanceof Error ? e.message : e);
+    console.warn("[catalog] FTS search error:", e instanceof Error ? e.message : e);
     return [];
   }
 }
