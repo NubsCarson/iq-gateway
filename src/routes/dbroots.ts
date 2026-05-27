@@ -33,7 +33,7 @@ const rpc = new Connection(
  *  Derivation mirrors the SDK's toSeedBytes: a human label is keccak256'd,
  *  while an already-hashed 64-hex hint is used as the seed verbatim. The
  *  resulting seed feeds getTablePda(dbRootPda, seed). */
-interface TableHint {
+export interface TableHint {
   /** utf-8 view if the bytes are printable, else null. */
   label: string | null;
   /** hex of the raw hint bytes — always present. */
@@ -42,7 +42,7 @@ interface TableHint {
   tablePda: string | null;
 }
 
-interface DbRootEntry {
+export interface DbRootEntry {
   pda: string;
   /** utf-8 view of db_root.id, or null when the id bytes aren't printable. */
   id: string | null;
@@ -59,7 +59,7 @@ interface DbRootEntry {
   globalTableSeeds: TableHint[];
 }
 
-interface DbRootsPayload {
+export interface DbRootsPayload {
   dbroots: DbRootEntry[];
   fetchedAt: number;
   count: number;
@@ -181,11 +181,13 @@ async function fetchAllDbRoots(): Promise<DbRootsPayload> {
   };
 }
 
-dbrootsRouter.get("/", async (c) => {
+/** Same payload the /dbroots route serves, with the same 30 min cache.
+ *  Exposed for in-process consumers (e.g. catalog ingest) so they don't
+ *  re-hit RPC just to walk the dApp tree. */
+export async function getCachedDbRoots(): Promise<DbRootsPayload> {
   const cached = cache.get(CACHE_KEY);
-  if (cached) return c.json(JSON.parse(cached));
+  if (cached) return JSON.parse(cached) as DbRootsPayload;
 
-  // Dedup concurrent cold-cache requests so we only hit RPC once.
   if (!inflight) {
     inflight = (async () => {
       try {
@@ -195,11 +197,14 @@ dbrootsRouter.get("/", async (c) => {
       }
     })();
   }
+  const payload = await inflight;
+  cache.set(CACHE_KEY, JSON.stringify(payload), TTL_MS);
+  return payload;
+}
 
+dbrootsRouter.get("/", async (c) => {
   try {
-    const payload = await inflight;
-    cache.set(CACHE_KEY, JSON.stringify(payload), TTL_MS);
-    return c.json(payload);
+    return c.json(await getCachedDbRoots());
   } catch (e) {
     console.error("[dbroots] failed:", e instanceof Error ? e.message : e);
     return c.json({ error: "failed to read DbRoots" }, 500);
