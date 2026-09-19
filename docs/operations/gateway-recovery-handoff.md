@@ -8,7 +8,7 @@ We can keep the frontend wherever and however Zo hosts it now. We also have reco
 
 Production is **Solana-only**, using one free Helius RPC key through `SOLANA_RPC_ENDPOINT`, as confirmed by the owner. Zo also has a free key and can use hers or whichever RPC setup she prefers. There is no RPC-key rotation, and the optional Helius batch API is disabled. No key is included in this repository.
 
-If Zo needs funds, I can send her SOL; she can let me know what she needs. This is an offer, not a completed transfer. Akash hosting itself is funded with ACT, with AKT kept for network fees.
+If Zo needs help paying for RPC, I can send her SOL; she can let me know what she needs. This is an offer, not a completed transfer. Akash hosting itself is funded with ACT, with AKT kept for network fees.
 
 | Item | Value |
 |---|---|
