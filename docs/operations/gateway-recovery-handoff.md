@@ -1,70 +1,94 @@
-# Gateway recovery: Akash and Cloudflare handoff for Zo
+# Run the IQ gateway with Akash Console Air
 
-Live checks refreshed 2026-09-19 04:34 UTC (September 18, Pacific). This handoff covers the gateway only. No ownership transfer or access grants have been made.
+We restored https://gateway.solanainternet.com by running Akash Console Air locally, connecting our existing Keplr wallet, and deploying the SDL linked below. This guide explains the same workflow for Zo.
 
-## Note for Zo
+We can keep the frontend wherever and however Zo hosts it now. We also have recovered Arweave frontend work and optional Solana hosting research; would you like those details separately? Neither is needed to operate this gateway.
 
-We recovered access to the original computer, wallets, and Cloudflare account and restored the gateway at https://gateway.solanainternet.com. The Akash deployment is running and received an additional 90 days of funding.
+## What is live
 
-We can leave the frontend wherever and however you are hosting it now to keep this simple. There is also recovered Arweave frontend work and optional Solana hosting research. Would you like more information about either, or should we keep the scope to the gateway? No frontend hosting change is required for this handoff.
-
-## Gateway status and verification
-
-- Endpoint: https://gateway.solanainternet.com
-- Fresh health check: HTTP 200 with status ok on /health; a representative table read returned HTTP 200 and 1 rows. Gateway local tests previously passed 114 tests. Health reported 225 RPC calls, 1 cumulative error, zero rate-limit events, and no queued requests at this check.
-- Source commit: IQCoreTeam/iq-gateway at 25427b3f50a4d0f8db365b6be0eb029358d1cda2.
-- Container image: ghcr.io/iqcoreteam/iq-gateway@sha256:7fce271cf560ebfd3760e966c174674816cbe47deca2f63ec5b44f0a121e1a5b
-- This deployment currently serves Solana gateway requests; EVM backends are not configured.
-- Production uses exactly one Helius RPC key through SOLANA_RPC_ENDPOINT. The owner identifies it as a free-plan key; the provider billing tier has not been independently verified. There is no configured RPC-key rotation, and the optional Helius batch API is disabled. The credential is private and is not included here or in the template.
-
-## Akash deployment and funding
+Production is **Solana-only**, using one Helius RPC key through `SOLANA_RPC_ENDPOINT`. The owner identifies it as a free-plan key; the billing tier has not been independently verified. There is no RPC-key rotation, and the optional Helius batch API is disabled. No key is included in this repository.
 
 | Item | Value |
 |---|---|
-| Deployment DSEQ | 28688125 |
-| Owner / funding address | akash1yz0080hzn89vny5qwx845ttanvqfeefhv6wv80 |
-| Provider | akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk |
-| Resources | 4 CPU, 4 GiB RAM, 1 GiB ephemeral storage, 10 GiB persistent NVMe cache |
-| Actual lease rate | 18 uACT per block |
-| Estimated running cost | 0.2592 ACT/day or 7.776 ACT per 30 days, assuming 6-second blocks |
-| Escrow funding | Initial 10 ACT plus confirmed 23.328 ACT top-up |
+| Gateway | https://gateway.solanainternet.com |
+| Deployment DSEQ | `28688125` |
+| Owner wallet | `akash1yz0080hzn89vny5qwx845ttanvqfeefhv6wv80` |
+| Provider | `akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk` |
+| Source commit | `25427b3f50a4d0f8db365b6be0eb029358d1cda2` |
+| Container image | `ghcr.io/iqcoreteam/iq-gateway@sha256:7fce271cf560ebfd3760e966c174674816cbe47deca2f63ec5b44f0a121e1a5b` |
+| Resources | 4 CPU, 4 GiB RAM, 1 GiB ephemeral disk, 10 GiB persistent cache |
+| Accepted lease price | 18 uACT/block; approximately 7.776 ACT per 30 days at 6-second blocks |
 
-The deployment and lease are both active. Escrow reports 33.328 ACT at settlement height 28688143. Deducting accrued rent through observed block 28689859 gives approximately 33.297112 ACT, or 128.5 days at 6-second blocks. This is a calculated estimate, not a guaranteed expiry date. The added 23.328 ACT corresponds to approximately 90 days at that block-time assumption.
+Last operational check: September 19, 2026, 04:34 UTC (September 18 Pacific). Deployment and lease were active; `/health` returned `ok`; a real table read returned HTTP 200. Previous gateway local tests passed 114 tests.
 
-Confirmed top-up transaction: 0E0BBD54E841CE34E85DC28C25C048EC846D901A78979B66CF9A2E69C40BC9D6, height 28688432.
+Funding snapshot: initial 10 ACT plus a confirmed 23.328 ACT top-up. After estimated accrued rent through block 28689859, about 33.297112 ACT remained, approximately 128.5 days at 6-second blocks. Wallet balance was 53.791103 AKT plus 0.169236 ACT. These are dated snapshots, not a guaranteed expiry date or live balance.
 
-Owner-wallet balance freshly rechecked: 53.791103 AKT and 0.169236 ACT. These values are snapshots as of the check above. Sending AKT to the owner wallet does not itself extend hosting: obtain ACT and deposit it into this deployment's escrow. Recheck live balances, conversion quote, lease price, and escrow before spending.
+Top-up transaction: `0E0BBD54E841CE34E85DC28C25C048EC846D901A78979B66CF9A2E69C40BC9D6`.
 
-The accompanying akash-recovery.template.yaml is a redacted configuration reference. It includes a bid ceiling from preparation, not the actual accepted lease price above. Supply the RPC endpoint privately and inspect the current deployment before applying anything. Do not create a duplicate or close the working lease just to take over operations.
+## 1. Start Console Air locally
 
-## Cloudflare DNS
+Use [Akash Console Air](https://github.com/akash-network/console-air), the wallet-based self-hosted console. We used version 1.1.1 at commit `f072b11ae8fb60249b6968826ad75e5f130c8c74`, running in Ubuntu/WSL and opened in a Windows browser with Keplr.
 
-- Domain: solanainternet.com, in the recovered Cloudflare account.
-- Zone ID: 68ee03df8522c68b60a2500a585236da.
-- Record: gateway CNAME to mv0rj8i5bl81h97nevfvj5i2f8.ingress.h4i-dedicated.eu-sw-2.digitalfrontier.so.
-- Proxy: enabled. SSL/TLS mode: Full. Both were rechecked in the Cloudflare dashboard for this review.
-- Preserve existing MX, SPF, and DKIM records.
-- Apex and www website routing are outside this gateway handoff.
+Install a current Node.js 22 LTS release and npm 11, then:
 
-If a future deployment gets a new provider hostname, verify the replacement endpoint first, update this CNAME, then check HTTPS health and representative reads through gateway.solanainternet.com. Record the old target so DNS can be restored if needed.
+```bash
+git clone https://github.com/akash-network/console-air.git
+cd console-air
+git checkout f072b11ae8fb60249b6968826ad75e5f130c8c74
+npm install
+npm --workspace apps/deploy-web run dev -- --hostname 127.0.0.1 --port 3188
+```
 
-## Proposed operator access — decide with Zo
+Open http://localhost:3188 in the browser that has Keplr installed. Console Air ships with hosted API/RPC defaults, so a separate local backend is not required. The local install may refresh its package lock; it is separate from the gateway repository.
 
-First agree which duties Zo wants: gateway updates, funding, DNS maintenance, or some subset. Obtain her verified email and Akash public address, plus agreed spending limits and access duration. No private keys are needed to discuss or prepare this plan.
+## 2. Connect the wallet
 
-- Akash: investigate permissions for Zo's own wallet using expiring Authz and a limited fee allowance. Verify the supported message versions and provider certificate/manifest requirements before promising that delegated access covers every operation. Agree separately on authority to close deployments, create new ones, or spend funds.
-- Cloudflare: grant access limited to this domain and the required DNS operations where supported. Avoid unrelated domain, account, and billing permissions.
-- RPC: agree who owns the provider account, quota, billing, and credential rotation. Deliver any required credential privately. Never place it in the fork, PR, document, or public SDL.
+Choose **Connect Wallet → Keplr**, approve the connection, and use Akash mainnet.
 
-Keep ownership with the current owner unless a separate transfer is explicitly agreed. No access invitation or message to Zo has been sent.
+To manage our existing deployment, the connected wallet address must match the owner above. In our recovery browser this wallet was named `dddd`. Connecting another wallet does not give it control of this deployment.
 
-## Laptop agent and fork/PR preparation
+Zo can follow the same instructions using her own wallet to deploy her own copy. Access to the current owner wallet and Cloudflare account can be arranged privately if we decide she should operate this existing instance. This guide does not transfer ownership or share keys.
 
-1. Confirm the intended gateway fork and branch with the owner. This package is local preparation; no GitHub push, issue edit, or PR has been made.
-2. Recheck the gateway health, representative reads, deployment status, escrow, and DNS. Treat the recorded balances and runtime estimate as snapshots.
-3. Place this document and the redacted SDL in the agreed gateway repository's operations documentation. Review for credentials before committing or pushing.
-4. Prepare a gateway-only PR describing the restored service, funding, DNS, operational checks, and proposed access. Keep frontend changes and hosting research separate.
-5. Ask Zo which gateway responsibilities she wants, then prepare the exact permissions for owner approval. Do not grant access or transfer ownership based solely on this plan.
+Keep some native AKT for network fees. Hosting escrow uses ACT; obtain ACT through the console's available conversion flow, check the quote, and fund the deployment. Sending AKT to a wallet alone does not add hosting time.
 
-After any gateway update, verify /health, representative table reads, provider logs, and remaining escrow. Retain the known image digest and previous DNS target for rollback planning.
+## 3. Use the SDL
 
+Open [akash-recovery.template.yaml](./akash-recovery.template.yaml). It matches the recovery SDL's configuration with the RPC URL replaced by a placeholder. The image is pinned to the deployed digest.
+
+In a private local copy, replace `REPLACE_WITH_WORKING_RPC_ENDPOINT` with the working mainnet Helius RPC URL. Do not commit the filled-in copy. Keep `IQ_CHAIN=solana` to reproduce the current production service.
+
+**Existing deployment:** open DSEQ `28688125`, inspect its current manifest and status, then use its update workflow if an actual change is needed. Keep the persistent cache volume. There is no need to create a duplicate deployment just to manage the working one.
+
+**New deployment:** create a deployment from the SDL, review its deposit and provider bids, choose a provider, create the lease, and send the manifest. Approve the requested transactions in the connected wallet. The SDL price is a bid ceiling of about 18.324451 uACT/block; our accepted bid was 18 uACT/block. A new deployment's available bids and price may differ.
+
+If using another hostname, change the SDL's `accept` hostname before deployment. After the provider starts the service, copy the assigned ingress hostname and check its status/logs. Do not assume a new deployment will get our current hostname.
+
+If Console Air asks for a deployment certificate, create/select one for the connected wallet. Certificates are stored in the browser. Use **App Settings → General → Export Local Data** to back them up privately; never add that export to Git. Moving browsers may require importing that backup or issuing a new certificate. See the [Console Air self-custody guide](https://github.com/akash-network/console-air/blob/f072b11ae8fb60249b6968826ad75e5f130c8c74/docs/self-custody.md).
+
+## 4. Point Cloudflare at the provider
+
+Our current settings in the `solanainternet.com` zone are:
+
+| Setting | Value |
+|---|---|
+| Record | CNAME `gateway` |
+| Target | `mv0rj8i5bl81h97nevfvj5i2f8.ingress.h4i-dedicated.eu-sw-2.digitalfrontier.so` |
+| Proxy | Proxied |
+| TTL | Auto |
+| SSL/TLS mode | Full |
+
+Keep this target for the existing deployment. For a replacement deployment, verify its ingress first and then change the CNAME to the new provider hostname. Save the previous value for rollback. Preserve the zone's MX, SPF, and DKIM records. Apex/www frontend routing is outside this guide.
+
+## 5. Verify and keep it funded
+
+Check https://gateway.solanainternet.com/health for `status: ok`, then a real read:
+
+https://gateway.solanainternet.com/table/FBwdrXug9cxuihupVzeN9B3Ajdx19WvxQgTDoRddpyGZ/rows?limit=10
+
+Check provider logs and remaining escrow in Console Air. Add ACT to the existing deployment when needed; confirm the owner address and DSEQ before depositing. At the current lease price, 23.328 ACT buys approximately 90 days at 6-second blocks, excluding changes in block timing.
+
+For a failed update, restore the known image/configuration through the existing deployment. If DNS was changed, restore the previous working target. Do not close a working deployment while diagnosing an update.
+
+## EVM status
+
+EVM was tested locally, not enabled in production. The same image can serve Solana plus EVM when `IQ_CHAIN` is **unset**. In this revision, explicitly setting `IQ_CHAIN=multi` incorrectly produces an empty chain map. Keep the production SDL Solana-only until a separate EVM rollout is agreed. No frontend hosting changes are needed.
