@@ -50,5 +50,3 @@ deployment:
     recovery:
       profile: gateway
       count: 1
-
-
