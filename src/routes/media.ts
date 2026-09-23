@@ -32,7 +32,9 @@ mediaRouter.get("/:id", async (c) => {
     const body = row.body ?? row.data;
     if (typeof body !== "string") return c.json({ error: "unsupported media payload" }, 415);
     if (body.length > MAX_ENCODED_BYTES) return c.json({ error: "media exceeds the 8 MiB encoded limit" }, 413);
-    const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/.exec(body);
+    // Code In preserves uploaded filenames as an optional data-URL parameter.
+    // Ignore the name; only the allowlisted MIME and decoded bytes are served.
+    const match = /^data:([^;,]+)(?:;name=[^;,\r\n]*)?;base64,([A-Za-z0-9+/]*={0,2})$/.exec(body);
     if (!match || !MEDIA_TYPES.has(match[1].toLowerCase())) return c.json({ error: "unsupported media type" }, 415);
     const bytes = Buffer.from(match[2], "base64");
     if (!bytes.length || bytes.toString("base64") !== match[2]) return c.json({ error: "invalid media encoding" }, 422);

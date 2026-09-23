@@ -6,6 +6,8 @@ use the same route with the configured network name and a transaction hash.
 The route supports `Range` and returns the original media MIME type.
 
 The row must contain a `body` or `data` string in `data:<mime>;base64,<bytes>` form.
+Code In's optional `;name=<urlencoded filename>` parameter before `;base64` is
+also accepted. The filename is ignored, not copied into response headers.
 External URLs, HTML, SVG and executable formats are not served. The limit is
 8 MiB of encoded content. A bounded in-memory cache avoids reconstructing the
 same inscription on every range request. Missing, invalid and unreadable rows
