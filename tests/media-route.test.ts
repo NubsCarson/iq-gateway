@@ -55,3 +55,26 @@ test("missing and oversized records have explicit statuses", async () => {
   const large = fixture("solana", {body:'A'.repeat(8*1024*1024+1)});
   expect((await large.app.request(`/media/${large.id}`)).status).toBe(413);
 });
+
+for (const kind of ["solana", "evm"] as const) {
+  test(`${kind} serves Code In filename parameters without changing media bytes or headers`, async () => {
+    const f = fixture(kind, {body: "data:audio/wav;name=my%20track%3B%20%231%20(live).wav;base64,AQIDBA=="});
+    const res = await f.app.request(`/media/${f.id}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("audio/wav");
+    expect(res.headers.get("Content-Disposition")).toBeNull();
+    expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([1,2,3,4]);
+  });
+}
+for (const body of [
+  "data:image/svg+xml;name=image.svg;base64,AA==",
+  "data:text/html;name=page.html;base64,AA==",
+  "data:audio/wav;name=x;other=y;base64,AA==",
+  "data:audio/wav;name=bad%ZZ.wav;base64,AA==",
+  "data:audio/wav;name=a,b.wav;base64,AA==",
+]) {
+  test(`rejects unsupported types and malformed filename parameters: ${body}`, async () => {
+    const f = fixture("solana", {body});
+    expect((await f.app.request(`/media/${f.id}`)).status).toBe(415);
+  });
+}
