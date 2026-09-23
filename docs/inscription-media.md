@@ -66,3 +66,11 @@ Deploy and verify this endpoint on the selected gateway before enabling the
 BlockChan/HoodChan transaction-reference attachment change. Existing gateways
 without the route cannot serve those references. The frontend retains ordinary
 media URLs; no browser RPC key or new upload implementation is required.
+
+
+Code In filename compatibility: media data URLs can contain one optional
+`name` parameter before `;base64,`, encoded with `encodeURIComponent` by the
+uploader. It is accepted but never copied into response headers or used as a
+filesystem path. MIME allowlisting, canonical base64 validation and byte-range
+handling are unchanged. Malformed percent escapes and extra parameters are
+rejected.

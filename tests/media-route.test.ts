@@ -16,7 +16,7 @@ function fixture(kind: "solana" | "evm", body: unknown, network = kind) {
 for (const kind of ["solana", "evm"] as const) {
   for (const mime of ["image/png", "audio/wav", "video/mp4"]) {
     test(`${kind} serves named ${mime} uploads without reflecting the filename`, async () => {
-      const f = fixture(kind, {body: `data:${mime};name=${encodeURIComponent("hello; 世界, test.wav")};base64,AQIDBA==`});
+      const f = fixture(kind, {body: `data:${mime};name=${encodeURIComponent("hello; 世界, #1 (live).wav")};base64,AQIDBA==`});
       const responses = await Promise.all(Array.from({length: 10}, () => f.app.request(`/media/${f.id}`)));
       for (const response of responses) {
         expect(response.status).toBe(200);
@@ -72,3 +72,16 @@ test("missing and oversized records have explicit statuses", async () => {
   const large = fixture("solana", {body:'A'.repeat(8*1024*1024+1)});
   expect((await large.app.request(`/media/${large.id}`)).status).toBe(413);
 });
+
+for (const body of [
+  "data:image/svg+xml;name=image.svg;base64,AA==",
+  "data:text/html;name=page.html;base64,AA==",
+  "data:audio/wav;name=x;other=y;base64,AA==",
+  "data:audio/wav;name=bad%ZZ.wav;base64,AA==",
+  "data:audio/wav;name=a,b.wav;base64,AA==",
+]) {
+  test(`rejects unsupported types and malformed filename parameters: ${body}`, async () => {
+    const f = fixture("solana", {body});
+    expect((await f.app.request(`/media/${f.id}`)).status).toBe(415);
+  });
+}
